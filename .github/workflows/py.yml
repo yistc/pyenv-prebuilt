@@ -1,0 +1,92 @@
+name: Built Python
+
+on:
+  # trigger with hand
+  workflow_dispatch: 
+
+permissions:
+  contents: write
+
+jobs:
+  build-number:
+    name: Set Build Number
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.build-number.outputs.build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Calculate Build Number
+        run:  echo BUILD_NUMBER=$(date +%Y.%m.%d).${{ github.run_number }} >> $GITHUB_ENV
+      - name: Tag Current Commit with Build Number
+        id: build-number
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git tag -a Build-$BUILD_NUMBER -m "CI Build $BUILD_NUMBER"
+          git push origin Build-$BUILD_NUMBER --tags -f
+          echo "build=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+
+  build-debian:
+    name: Build Debian
+    needs: [build-number]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        debian: [11, 12]
+        python: ["3.11.3", "3.12.3"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build Python ${{ matrix.python }} on Debian ${{ matrix.debian }} in Docker
+        # build python in docker
+        run: |
+            docker build . -t python -f Debian.dockerfile \
+                --build-arg="DEBIAN_VERSION=${{ matrix.debian }}" \
+                --build-arg="PYTHON_VERSION=${{ matrix.python }}"
+            docker run --rm python tar -C /usr/local/share/pyenv/versions -cf - . | zstd -16 > python.tar.zst
+
+      - name: Get Python Full Version
+        run: echo PYTHON_FULL_VERSION=$(docker run --rm python ls /usr/local/share/pyenv/versions | head -1)               >> $GITHUB_ENV
+      - name: Get Release Filename
+        run: echo "RELEASE_FILENAME=python-${{ env.PYTHON_FULL_VERSION }}-amd64-pyenv-debian-${{ matrix.debian }}.tar.zst" >> $GITHUB_ENV
+      - name: Set Release Filename
+        run: mv python.tar.zst "$RELEASE_FILENAME"
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.RELEASE_FILENAME }}
+          tag_name: Build-${{ needs.build-number.outputs.build }}
+          append_body: true
+          make_latest: true
+
+  build-ubuntu:
+    name: Build Ubuntu
+    needs: [build-number]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ubuntu: ["22.04", "20.04"]
+        python: ["3.11.3", "3.12.3"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build Python ${{ matrix.python }} on Ubuntu ${{ matrix.ubuntu }} in Docker
+        run: |
+            docker build . -t python -f Ubuntu.dockerfile \
+                --build-arg="UBUNTU_VERSION=${{ matrix.ubuntu }}" \
+                --build-arg="PYTHON_VERSION=${{ matrix.python }}"
+            docker run --rm python tar -C /usr/local/share/pyenv/versions -cf - . | zstd -16 > python.tar.zst
+      - name: Get Python Full Version
+        run: echo PYTHON_FULL_VERSION=$(docker run --rm python ls /usr/local/share/pyenv/versions | head -1)               >> $GITHUB_ENV
+      - name: Get Release Filename
+        run: echo "RELEASE_FILENAME=python-${{ env.PYTHON_FULL_VERSION }}-amd64-pyenv-ubuntu-${{ matrix.ubuntu }}.tar.zst" >> $GITHUB_ENV
+      - name: Set Release Filename
+        run: mv python.tar.zst "$RELEASE_FILENAME"
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.RELEASE_FILENAME }}
+          tag_name: Build-${{ needs.build-number.outputs.build }}
+          append_body: true
+          make_latest: true
