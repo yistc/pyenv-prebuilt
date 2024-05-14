@@ -1,4 +1,4 @@
-name: Built Python
+name: Build Python for Pyenv
 
 on:
   # trigger with hand
